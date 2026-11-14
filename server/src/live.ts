@@ -30,8 +30,7 @@ export class LiveGateway implements OnGatewayConnection,OnGatewayDisconnect{
     audio_format:'pcm_16000',language_code:'vi',commit_strategy:'vad',
     vad_silence_threshold_secs:'0.8'
    });
-   // Scribe v3 Live supports diarization, but the final batch transcript remains authoritative.
-   if((process.env.ELEVENLABS_LIVE_MODEL||'scribe_v3_live')==='scribe_v3_live')query.set('diarize','true');
+   // Realtime is plain transcription only. Speaker diarization stays in Scribe Batch.
    const ws=new WebSocket('wss://api.elevenlabs.io/v1/speech-to-text/realtime?'+query.toString(),{
     headers:{'xi-api-key':key}
    });
