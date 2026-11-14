@@ -133,3 +133,19 @@ Server Dockerfile đã gọi `prisma db push` khi khởi động nên các cột
 - Timeout gọi ElevenLabs Batch 8 phút và LLM 3 phút. Khi quá thời gian, job báo lỗi và cho phép thử lại. Những recording rất dài nên chuyển sang một hàng đợi chuyên dụng có retry/heartbeat và xử lý audio theo phần.
 - Upload âm thanh vẫn là một request HTTP và browser hiện giữ các chunk trong bộ nhớ cho tới khi kết thúc. Với cuộc họp dài cần bổ sung resumable chunk upload, bảo vệ khi đóng tab, và tăng giới hạn proxy/body phù hợp.
 - File âm thanh và transcript chứa dữ liệu nhạy cảm; nên sử dụng HTTPS, backup, phân quyền truy cập, và chính sách lưu trữ/xóa rõ ràng.
+
+
+## Biên bản AI có cấu trúc
+
+Tab **Biên bản** được trình bày theo các phần: **Thông tin chung → Tóm tắt → Nội dung chính (theo chủ đề) → Quyết định → Việc cần làm**. API ghi trường `summary` để Dashboard vẫn hiển thị mô tả ngắn, đồng thời lưu trường JSON `minutes` chứa hình thức cuộc họp, những người tham dự được nêu rõ, và các nhóm chủ đề.
+
+Trường `minutes` mới cần cập nhật Prisma schema trước khi chạy app:
+
+```bash
+npm run db:generate --workspace server
+npm run db:push --workspace server
+```
+
+Khi chạy Docker Compose, container server hiện đã gọi `prisma db push` lúc khởi động; vẫn nên quản lý schema bằng migration khi đưa lên production. Với cuộc họp đã tạo trước khi có trường này, phần biên bản vẫn hiển thị summary, decisions, actions cũ. Bấm **Tạo lại biên bản** để bổ sung các mục mới (tốn thêm lượt gọi LLM).
+
+AI được yêu cầu chỉ dùng nội dung transcript, không tự suy đoán tên người, hình thức cuộc họp, nhiệm vụ hoặc hạn chót. Ngày và thời lượng lấy từ metadata cuộc họp ở hệ thống; những dữ liệu không xác định sẽ hiển thị **Chưa xác định**.
