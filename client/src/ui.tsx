@@ -24,6 +24,9 @@ function Live(){const{id}=useParams();const navigate=useNavigate();const[m,setM]
  if(!navigator.mediaDevices?.getUserMedia)throw new Error('Cần HTTPS hoặc localhost để truy cập microphone');
  const mic=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,channelCount:1}});
  stream.current=mic;
+ // Initialize audio engine while handling the user-initiated recording action.
+ const context=new AudioContext();audioContext.current=context;
+ await context.resume();
  const s=io({auth:{token:getToken()},transports:['websocket']});socket.current=s;
  s.on('live:error',(msg:string)=>{setError(msg);setStatus('error')});
  s.on('live:final',(seg:Segment)=>{setSegments(old=>[...old,seg]);setInterim(null)});
@@ -36,7 +39,7 @@ function Live(){const{id}=useParams();const navigate=useNavigate();const[m,setM]
    recorder.ondataavailable=ev=>{if(ev.data.size)chunks.current.push(ev.data)};
    recorder.start(1000);media.current=recorder;
    // Scribe live requires PCM16 mono at 16 kHz, not WebM/Opus.
-   const context=new AudioContext();audioContext.current=context;
+   const context=audioContext.current!;
    const source=context.createMediaStreamSource(mic);audioSource.current=source;
    const node=context.createScriptProcessor(4096,1,1);processor.current=node;
    node.onaudioprocess=event=>{
