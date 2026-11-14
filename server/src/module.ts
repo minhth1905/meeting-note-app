@@ -4,6 +4,7 @@ import {Db} from './db';
 import {AuthController,AuthService,JwtGuard} from './auth';
 import {MeetingsController,MeetingsService} from './meetings';
 import {LiveGateway} from './live';
+import {MeetingProcessingWorker} from './processing';
 
-@Module({imports:[JwtModule.register({secret:process.env.JWT_SECRET||'UNSAFE_DEV_ONLY_CHANGE_ME',signOptions:{expiresIn:'7d'}})],controllers:[AuthController,MeetingsController],providers:[Db,AuthService,JwtGuard,MeetingsService,LiveGateway]})
+@Module({imports:[JwtModule.register({secret:process.env.JWT_SECRET||'UNSAFE_DEV_ONLY_CHANGE_ME',signOptions:{expiresIn:'7d'}})],controllers:[AuthController,MeetingsController],providers:[Db,AuthService,JwtGuard,MeetingsService,LiveGateway,MeetingProcessingWorker]})
 export class AppModule {}
