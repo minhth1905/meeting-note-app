@@ -70,13 +70,60 @@ export function appendTranscriptWord(previous:string,token:string):string{
   });
   return {segments:segments.length,speakers:[...new Set(segments.map(s=>s.speakerKey).filter(Boolean))]};
  }
- async generateNotes(id:string,userId:string){await this.own(id,userId);const segments=await this.db.segment.findMany({where:{meetingId:id},orderBy:{startMs:'asc'}});if(!segments.length)throw new BadRequestException('Chưa có transcript');if(!process.env.OPENCODE_API_KEY)throw new BadRequestException('Chưa cấu hình OPENCODE_API_KEY');
- const transcript=segments.map(s=>`[${Math.floor(s.startMs/1000)}s] ${s.speakerKey||'Unknown'}: ${s.content}`).join('\n').slice(0,110000);
- const baseUrl=(process.env.OPENCODE_BASE_URL||'https://opencode.ai/inference/go/openai/v1').replace(/\/+$/,'');
- const result=await fetch(`${baseUrl}/chat/completions`,{method:'POST',headers:{Authorization:`Bearer ${process.env.OPENCODE_API_KEY}`,'Content-Type':'application/json','User-Agent':'meeting-notes-app/1.0','x-opencode-session':`ses_${id}`},signal:AbortSignal.timeout(3*60*1000),body:JSON.stringify({model:process.env.OPENCODE_MODEL||'glm-5.3-flash',temperature:0.2,response_format:{type:'json_object'},messages:[{role:'system',content:'You create truthful Vietnamese meeting notes. Respond ONLY valid JSON with keys summary (Vietnamese string), decisions (string array), actions (array of objects with title,assignee,dueDate). Do not invent names, deadlines or decisions. Use null for absent information.'},{role:'user',content:transcript}]})});if(!result.ok)throw new BadRequestException('AI summary API error: '+(await result.text()).slice(0,300));
- const body:any=await result.json();let parsed:any;try{parsed=JSON.parse(body.choices?.[0]?.message?.content||'{}')}catch{throw new BadRequestException('AI response invalid JSON')}
- const summary=typeof parsed.summary==='string'?parsed.summary:'';const decisions=Array.isArray(parsed.decisions)?parsed.decisions.filter((x:any)=>typeof x==='string'):[];const actions=Array.isArray(parsed.actions)?parsed.actions:[];
- await this.db.$transaction(async tx=>{await tx.actionItem.deleteMany({where:{meetingId:id}});await tx.meeting.update({where:{id},data:{summary,decisions,status:'completed'}});for(const a of actions.slice(0,30)){if(typeof a.title==='string'&&a.title.trim())await tx.actionItem.create({data:{meetingId:id,title:a.title.slice(0,500),assignee:typeof a.assignee==='string'?a.assignee:null,dueDate:typeof a.dueDate==='string'?a.dueDate:null}})}});return this.detail(id,userId);
+ async generateNotes(id:string,userId:string){
+  const meeting=await this.own(id,userId);
+  const segments=await this.db.segment.findMany({where:{meetingId:id},orderBy:{startMs:'asc'}});
+  if(!segments.length)throw new BadRequestException('Chưa có bản phiên âm');
+  if(!process.env.OPENCODE_API_KEY)throw new BadRequestException('Chưa cấu hình OPENCODE_API_KEY');
+  const transcript=segments.map(s=>`[${Math.floor(s.startMs/1000)}s] ${s.speakerKey||'Không rõ'}: ${s.content}`).join('\n').slice(0,110000);
+  const baseUrl=(process.env.OPENCODE_BASE_URL||'https://opencode.ai/inference/go/openai/v1').replace(/\/+$/,'');
+  const systemPrompt=`Bạn là thư ký cuộc họp chuyên nghiệp. Viết BIÊN BẢN CUỘC HỌP có cấu trúc bằng tiếng Việt dựa TRỰC TIẾP vào bản phiên âm được cung cấp.
+Trả về DUY NHẤT JSON hợp lệ với các khóa:
+{
+ "meetingType": string | null,
+ "attendees": string[],
+ "summary": string,
+ "topics": [{"title": string, "points": string[]}],
+ "decisions": string[],
+ "actions": [{"title": string, "assignee": string | null, "dueDate": string | null}]
+}
+Quy tắc nghiêm ngặt:
+- summary: 2–5 câu văn dễ đọc, nói rõ mục đích và kết quả cuộc họp.
+- topics: nhóm các nội dung quan trọng theo chủ đề, đặt tiêu đề ngắn gọn và mỗi nhóm 2–6 gạch đầu dòng. Không chép nguyên transcript. Có thể trả [] nếu không đủ nội dung.
+- attendees và meetingType CHỈ lấy nếu được nhắc rõ trong bản phiên âm. Không tự coi Speaker 1, Speaker 2 là tên thật. Không suy đoán người tham dự, hình thức cuộc họp hoặc ngày họp.
+- decisions: chỉ những quyết định đã thực sự được thống nhất; không suy diễn.
+- actions: chỉ những nhiệm vụ thực sự được giao; người phụ trách và hạn là null nếu không được nói rõ.
+- Mọi thông tin không có bằng chứng từ transcript phải để null hoặc [].
+- Không thêm markdown fence, không viết lời giải thích ngoài JSON.`;
+  const response=await fetch(`${baseUrl}/chat/completions`,{
+   method:'POST',
+   headers:{Authorization:`Bearer ${process.env.OPENCODE_API_KEY}`,'Content-Type':'application/json','User-Agent':'meeting-notes-app/1.0','x-opencode-session':`ses_${id}`},
+   signal:AbortSignal.timeout(3*60*1000),
+   body:JSON.stringify({model:process.env.OPENCODE_MODEL||'glm-5.3-flash',temperature:0.2,response_format:{type:'json_object'},messages:[{role:'system',content:systemPrompt},{role:'user',content:`Tên cuộc họp trong ứng dụng: ${meeting.title}\n\nBản phiên âm:\n${transcript}`}]})
+  });
+  if(!response.ok)throw new BadRequestException('AI summary API error: '+(await response.text()).slice(0,300));
+  const body:any=await response.json();
+  let parsed:any;
+  try{parsed=JSON.parse(body.choices?.[0]?.message?.content||'{}')}catch{throw new BadRequestException('AI response invalid JSON')}
+  if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new BadRequestException('AI response invalid structure');
+  const clean=(value:any,max=1200)=>typeof value==='string'?value.trim().slice(0,max):'';
+  const summary=clean(parsed.summary,6000);
+  if(!summary)throw new BadRequestException('AI response missing summary');
+  const attendees=Array.isArray(parsed.attendees)?parsed.attendees.map((v:any)=>clean(v,100)).filter(Boolean).slice(0,40):[];
+  const topics=Array.isArray(parsed.topics)?parsed.topics.slice(0,18).map((t:any)=>({
+   title:clean(t?.title,160),points:Array.isArray(t?.points)?t.points.map((p:any)=>clean(p,800)).filter(Boolean).slice(0,8):[]
+  })).filter((t:{title:string;points:string[]})=>t.title&&t.points.length):[];
+  const decisions=Array.isArray(parsed.decisions)?parsed.decisions.map((v:any)=>clean(v,800)).filter(Boolean).slice(0,30):[];
+  const actions=Array.isArray(parsed.actions)?parsed.actions.slice(0,30).map((a:any)=>({
+   title:clean(a?.title,500),assignee:clean(a?.assignee,100)||null,dueDate:clean(a?.dueDate,100)||null
+  })).filter((a:{title:string})=>a.title):[];
+  const minutes={meetingType:clean(parsed.meetingType,120)||null,attendees,topics};
+  await this.db.$transaction(async tx=>{
+   await tx.actionItem.deleteMany({where:{meetingId:id}});
+   await tx.meeting.update({where:{id},data:{summary,minutes,decisions,status:'completed'}});
+   if(actions.length)await tx.actionItem.createMany({data:actions.map((a:{title:string;assignee:string|null;dueDate:string|null})=>({meetingId:id,...a}))});
+  });
+  return this.detail(id,userId);
  }
 }
 @Controller('meetings')@UseGuards(JwtGuard)export class MeetingsController{
