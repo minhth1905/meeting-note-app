@@ -7,6 +7,16 @@ import {mkdir,writeFile,readFile,rm} from 'fs/promises';import path from 'path';
 class CreateMeetingDto{@IsString() @MaxLength(180) title!:string;@IsOptional() @IsString() @MaxLength(2000) description?:string}
 class SpeakerDto{@IsString() speakerKey!:string;@IsString() displayName!:string}
 class ActionDto{@IsBoolean() completed!:boolean}
+// ElevenLabs batch returns word-level tokens. Vietnamese words need spaces,
+// but punctuation and tokens with their own whitespace should be preserved.
+export function appendTranscriptWord(previous:string,token:string):string{
+ if(!previous)return token;
+ if(!token)return previous;
+ if(/\s$/.test(previous)||/^\s/.test(token))return previous+token;
+ if(/^[,.;:!?%\)\]\}…]/u.test(token))return previous+token;
+ if(/[\(\[\{]$/.test(previous))return previous+token;
+ return previous+' '+token;
+}
 @Injectable() export class MeetingsService{
  constructor(public db:Db){}
  async own(id:string,userId:string){const m=await this.db.meeting.findFirst({where:{id,userId}});if(!m)throw new NotFoundException('Meeting không tồn tại');return m;}
@@ -39,7 +49,7 @@ class ActionDto{@IsBoolean() completed!:boolean}
    if(!current||current.speakerKey!==speakerKey||startMs-current.endMs>1500){
     if(current?.content.trim())segments.push({...current,content:current.content.trim()});
     current={speakerKey,content:word.text,startMs,endMs};
-   }else{current.content+=word.text;current.endMs=endMs}
+   }else{current.content=appendTranscriptWord(current.content,word.text);current.endMs=endMs}
   }
   if(current?.content.trim())segments.push({...current,content:current.content.trim()});
   await this.db.$transaction(async tx=>{
