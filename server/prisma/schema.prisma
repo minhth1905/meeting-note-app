@@ -25,6 +25,12 @@ model Meeting {
   finishedAt DateTime?
   audioPath String?
   summary String?
+  // Persistent async pipeline state: queued -> transcribing -> generating_notes -> completed/failed.
+  processingStage String @default("idle")
+  processingError String?
+  processingAttempts Int @default(0)
+  processingLeaseUntil DateTime?
+  processingRequestedAt DateTime?
   decisions Json?
   userId String
   user User @relation(fields:[userId], references:[id], onDelete:Cascade)
