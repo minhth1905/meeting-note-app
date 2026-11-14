@@ -33,7 +33,7 @@ class ActionDto{@IsBoolean() completed!:boolean}
   const segments:{speakerKey:string|null;content:string;startMs:number;endMs:number}[]=[];
   let current:{speakerKey:string|null;content:string;startMs:number;endMs:number}|null=null;
   for(const word of words){
-   const speakerKey=word.speaker_id===null||word.speaker_id===undefined?null:String(word.speaker_id).replace(/^speaker_(\\d+)$/,(_match:string,num:string)=>'Speaker '+(Number(num)+1));
+   const speakerKey=word.speaker_id===null||word.speaker_id===undefined?null:'Speaker '+(Number(String(word.speaker_id).split('_').pop())+1);
    const startMs=Math.max(0,Math.round(Number(word.start||0)*1000));
    const endMs=Math.max(startMs,Math.round(Number(word.end||word.start||0)*1000));
    if(!current||current.speakerKey!==speakerKey||startMs-current.endMs>1500){
