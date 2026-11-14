@@ -1,0 +1,64 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+model User {
+  id String @id @default(cuid())
+  email String @unique
+  name String
+  passwordHash String
+  createdAt DateTime @default(now())
+  meetings Meeting[]
+}
+model Meeting {
+  id String @id @default(cuid())
+  title String
+  description String @default("")
+  status String @default("created")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  startedAt DateTime?
+  finishedAt DateTime?
+  audioPath String?
+  summary String?
+  decisions Json?
+  userId String
+  user User @relation(fields:[userId], references:[id], onDelete:Cascade)
+  segments Segment[]
+  speakers Speaker[]
+  actions ActionItem[]
+  @@index([userId,createdAt])
+}
+model Speaker {
+  id String @id @default(cuid())
+  meetingId String
+  speakerKey String
+  displayName String
+  meeting Meeting @relation(fields:[meetingId],references:[id],onDelete:Cascade)
+  @@unique([meetingId,speakerKey])
+}
+model Segment {
+  id String @id @default(cuid())
+  meetingId String
+  speakerKey String?
+  content String
+  startMs Int
+  endMs Int
+  isFinal Boolean @default(true)
+  createdAt DateTime @default(now())
+  meeting Meeting @relation(fields:[meetingId],references:[id],onDelete:Cascade)
+  @@index([meetingId,startMs])
+}
+model ActionItem {
+  id String @id @default(cuid())
+  meetingId String
+  title String
+  assignee String?
+  dueDate String?
+  completed Boolean @default(false)
+  meeting Meeting @relation(fields:[meetingId],references:[id],onDelete:Cascade)
+}
