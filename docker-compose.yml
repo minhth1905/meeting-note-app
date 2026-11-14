@@ -34,7 +34,7 @@ services:
       context: .
       dockerfile: client/Dockerfile
     ports:
-      - "127.0.0.1:8080:80"
+      - "0.0.0.0:8080:80"
     depends_on: [server]
 volumes:
   pgdata:

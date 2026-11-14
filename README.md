@@ -46,7 +46,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-The web container listens on localhost:8080 and the API on localhost:3001. Put Caddy/Nginx HTTPS reverse proxy in front of `127.0.0.1:8080`. **Microphone capture requires HTTPS or localhost**. Configure `WEB_ORIGIN` with the exact public origin, including scheme, or Socket.IO CORS may reject requests.
+The web container listens on host port `8080`; the API remains on host port `3001` and PostgreSQL on `5433`. If the HTTPS reverse proxy runs on another server, allow port `8080` only from that proxy server and point it at the app server's private IP. **Microphone capture requires HTTPS or localhost**. Configure `WEB_ORIGIN` with the exact public origin, including scheme, or Socket.IO CORS may reject requests.
 
 Example Caddyfile:
 ```
