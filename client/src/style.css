@@ -51,3 +51,7 @@
 .live-plain-line small{color:#77869d;display:block;margin-bottom:5px;font-size:11px}
 .live-plain-line p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
 .live-plain-interim{color:#7d899c;background:#f7faff;font-style:italic}
+
+/* Dashboard full transcript tab should not inherit the 4-line preview scroll height. */
+.preview-transcript.full-transcript{max-height:none;overflow:visible}
+.tabs .tab[role="tab"]{cursor:pointer}
