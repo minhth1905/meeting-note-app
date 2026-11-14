@@ -25,6 +25,8 @@ model Meeting {
   finishedAt DateTime?
   audioPath String?
   summary String?
+  // Structured AI meeting minutes for detailed report rendering.
+  minutes Json?
   // Persistent async pipeline state: queued -> transcribing -> generating_notes -> completed/failed.
   processingStage String @default("idle")
   processingError String?
