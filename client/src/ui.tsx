@@ -144,14 +144,14 @@ function Live(){const{id}=useParams();const navigate=useNavigate();const[m,setM]
    const recorder=new MediaRecorder(mic,{mimeType:mime});chunks.current=[];
    recorder.ondataavailable=ev=>{if(ev.data.size)chunks.current.push(ev.data)};
    recorder.start(1000);media.current=recorder;
-   // Scribe live requires PCM16 mono at 16 kHz, not WebM/Opus.
+   // OpenAI gpt-live-transcribe requires PCM16 mono at 24 kHz.
    const context=audioContext.current!;
    const source=context.createMediaStreamSource(mic);audioSource.current=source;
    const node=context.createScriptProcessor(4096,1,1);processor.current=node;
    node.onaudioprocess=event=>{
     if(media.current?.state!=='recording'||!s.connected)return;
     const samples=event.inputBuffer.getChannelData(0);
-    const ratio=context.sampleRate/16000;
+    const ratio=context.sampleRate/24000;
     const length=Math.floor(samples.length/ratio);
     const pcm=new Int16Array(length);
     for(let i=0;i<length;i++){
@@ -176,8 +176,15 @@ const pause=()=>{if(!media.current)return;if(media.current.state==='recording'){
   await new Promise<void>(resolve=>{recorder.addEventListener('stop',()=>resolve(),{once:true});recorder.stop()});
  }
  stream.current?.getTracks().forEach(t=>t.stop());
- socket.current?.emit('live:stop');
- await new Promise(resolve=>setTimeout(resolve,1900));
+ // Give OpenAI a chance to commit the trailing speech turn before disconnecting.
+ await new Promise<void>(resolve=>{
+  const live=socket.current;
+  if(!live?.connected){resolve();return}
+  const timeout=setTimeout(()=>{live.off('live:stopped',onStopped);resolve()},7500);
+  const onStopped=()=>{clearTimeout(timeout);resolve()};
+  live.once('live:stopped',onStopped);
+  live.emit('live:stop');
+ });
  socket.current?.disconnect();
  setStatus('processing');
  const blob=new Blob(chunks.current,{type:'audio/webm'});

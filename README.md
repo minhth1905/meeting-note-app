@@ -6,7 +6,7 @@ An original, Vietnamese-first Meeting Notes app inspired by the supplied UI refe
 - JWT password login/logout (single configured demo account)
 - Create/list/view/delete meetings, meeting detail and dashboard
 - Browser microphone recording with pause/resume/stop
-- Deepgram streaming transcription over backend Socket.IO, with interim/final segments and speaker IDs
+- OpenAI gpt-live-transcribe streaming over NestJS Socket.IO, with interim/final captions (speaker names only after batch)
 - Persist final segments to PostgreSQL with Prisma
 - Manually rename Speaker 1, Speaker 2, etc. in meeting details
 - Upload and playback recorded WebM audio
@@ -16,11 +16,11 @@ An original, Vietnamese-first Meeting Notes app inspired by the supplied UI refe
 
 ## Start locally
 
-Requirements: Node.js 22+, npm, Docker (PostgreSQL), working Deepgram & OpenCode Go API keys.
+Requirements: Node.js 22+, npm, Docker (PostgreSQL), working OpenAI, ElevenLabs and OpenCode Go API keys.
 
 ```bash
 cp .env.example .env
-# Set JWT_SECRET, DEMO_EMAIL, DEMO_PASSWORD, DEEPGRAM_API_KEY, OPENCODE_API_KEY
+# Set JWT_SECRET, DEMO_EMAIL, DEMO_PASSWORD, OPENAI_API_KEY, ELEVENLABS_API_KEY, OPENCODE_API_KEY
 # Optional: OPENCODE_MODEL (default: glm-5.3-flash), OPENCODE_BASE_URL
 # Database is exposed on localhost only:
 docker compose up -d postgres
@@ -81,22 +81,41 @@ Browser MediaRecorder (WebM/Opus chunks) → authenticated Socket.IO on NestJS �
 9. The live UI deliberately does not claim reliable real-time LLM summary: notes are generated when recording ends.
 10. Speaker IDs are diarization estimates and can change; name assignment is manual. The transcript may contain duplicate segments from provider endpointing; verify with integration tests.
 
-## ElevenLabs Scribe transcription
+## Realtime: OpenAI gpt-live-transcribe + final: ElevenLabs Batch
 
-The live transcription provider is ElevenLabs Scribe v3 Live. Completed recordings are submitted to Scribe v3 Batch with diarization enabled before the AI summary runs. The batch result replaces provisional live transcript segments and returns Speaker 1, Speaker 2, etc., which can be renamed on the meeting detail page. Speaker labels are not identities; users should verify them.
+Realtime captions use OpenAI's transcription WebSocket; the server connects to
+`wss://api.openai.com/v1/realtime?intent=transcription` and configures
+`gpt-live-transcribe`. The browser sends **PCM16 mono, 24 kHz** over the existing
+Socket.IO link. NestJS performs simple energy/silence-based turn detection and
+commits speech turns to OpenAI. Only completed turns are stored in PostgreSQL;
+partial text is shown temporarily. The OpenAI key is never sent to the browser.
 
-Set the following server-side environment variables in `.env`:
+When recording ends, the original audio is uploaded to the VPS and **ElevenLabs
+Scribe v3 Batch** creates the official transcript with speaker diarization. The
+existing background processing pipeline then generates minutes and action items.
+Live captions do not attempt speaker identification.
+
+Configure server-side environment variables:
 
 ```env
+OPENAI_API_KEY=your-openai-api-key
+OPENAI_LIVE_MODEL=gpt-live-transcribe
+OPENAI_STT_KEYWORDS=NestJS,Ruby on Rails,PostgreSQL
 ELEVENLABS_API_KEY=your-elevenlabs-api-key
-ELEVENLABS_LIVE_MODEL=scribe_v3_live
 ELEVENLABS_BATCH_MODEL=scribe_v3
+OPENCODE_API_KEY=your-opencode-api-key
 ```
 
-The browser records WebM/Opus for storage and separately sends downsampled 16-kHz mono PCM16 over the authenticated Socket.IO connection to NestJS. The NestJS gateway forwards base64 PCM audio to ElevenLabs WebSocket; the API key never reaches the browser. The client receives partial and committed transcripts. When recording stops, the audio file is uploaded and the batch endpoint (`POST /api/meetings/:id/transcribe`) runs before `POST /api/meetings/:id/notes`.
+Use an OpenAI API key with separate API billing and model access; a ChatGPT
+subscription alone does not authorize API usage.
 
-**Limitations:** Batch transcription is currently a synchronous HTTP request, so long recordings may require a worker queue and reverse-proxy timeout changes. Long recordings are buffered in the browser and should eventually be uploaded in resilient chunks. Realtime speaker IDs are not persisted; final diarization comes from batch. The browser microphone requires HTTPS outside localhost. Both live and batch requests incur ElevenLabs usage costs. If batch fails, provisional realtime segments are retained and the client may still generate notes from those; check server logs and transcript quality before relying on the summary.
-
+**Limitations:** Live and batch each incur separate billing. VAD based on microphone
+energy is a basic MVP implementation; crowded rooms/background noise may split
+speech imperfectly. Live transcripts have approximate timestamps and no speaker
+identification. Browser recording still buffers WebM chunks in memory and uploads
+the whole recording upon Stop; long meetings (e.g. 4h) need resumable periodic
+chunk uploads before production. The transcription WebSocket may need automatic
+reconnection for long sessions. Test a short real recording before deploying.
 
 ## Tự động xử lý cuộc họp (không chờ HTTP lâu)
 
