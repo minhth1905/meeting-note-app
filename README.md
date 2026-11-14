@@ -81,7 +81,7 @@ Browser MediaRecorder (WebM/Opus chunks) â†’ authenticated Socket.IO on NestJS â
 9. The live UI deliberately does not claim reliable real-time LLM summary: notes are generated when recording ends.
 10. Speaker IDs are diarization estimates and can change; name assignment is manual. The transcript may contain duplicate segments from provider endpointing; verify with integration tests.
 
-## Realtime: OpenAI gpt-live-transcribe + final: ElevenLabs Batch
+## OpenAI realtime + OpenAI diarized batch
 
 Realtime captions use OpenAI's transcription WebSocket; the server connects to
 `wss://api.openai.com/v1/realtime?intent=transcription` and configures
@@ -90,10 +90,27 @@ Socket.IO link. NestJS performs simple energy/silence-based turn detection and
 commits speech turns to OpenAI. Only completed turns are stored in PostgreSQL;
 partial text is shown temporarily. The OpenAI key is never sent to the browser.
 
-When recording ends, the original audio is uploaded to the VPS and **ElevenLabs
-Scribe v3 Batch** creates the official transcript with speaker diarization. The
-existing background processing pipeline then generates minutes and action items.
-Live captions do not attempt speaker identification.
+When recording ends, the original recording is uploaded to the server. The
+persistent NestJS processing worker transcribes it via **OpenAI
+gpt-4o-transcribe-diarize** (Audio Transcriptions API with `diarized_json` and
+`chunking_strategy=auto`). It persists start/end timestamps, dialogue, and
+anonymous speaker labels, replacing provisional realtime transcript segments
+**only after all batch calls succeed**. The LLM then generates the minutes.
+The realtime pipeline remains unchanged; there are no ElevenLabs API calls.
+
+OpenAI accepts a maximum 25 MB input per request. Files larger than 24 MiB
+are split with FFmpeg into separately decodable 10-minute MP3 clips.
+Each clip is processed sequentially and timestamp offsets are stitched back.
+**Important:** a speaker label from one independently processed clip is NOT
+automatically identified as the same speaker in another clip. This implementation
+assigns distinct anonymous labels across clips to avoid false identity matching;
+long recordings may show more speaker labels than actual participants. Accurate
+cross-clip matching would require voice embeddings or known-speaker reference
+clips. Short recordings under 24 MiB are sent in one request and are not affected.
+
+OpenAI currently lists `gpt-4o-transcribe-diarize` as deprecated, with
+shutdown scheduled for **February 26, 2027**. Keep the provider configurable
+and plan a replacement before that date.
 
 Configure server-side environment variables:
 
@@ -101,15 +118,14 @@ Configure server-side environment variables:
 OPENAI_API_KEY=your-openai-api-key
 OPENAI_LIVE_MODEL=gpt-live-transcribe
 OPENAI_STT_KEYWORDS=NestJS,Ruby on Rails,PostgreSQL
-ELEVENLABS_API_KEY=your-elevenlabs-api-key
-ELEVENLABS_BATCH_MODEL=scribe_v3
+OPENAI_BATCH_MODEL=gpt-4o-transcribe-diarize
 OPENCODE_API_KEY=your-opencode-api-key
 ```
 
 Use an OpenAI API key with separate API billing and model access; a ChatGPT
 subscription alone does not authorize API usage.
 
-**Limitations:** Live and batch each incur separate billing. VAD based on microphone
+**Limitations:** OpenAI live and OpenAI diarization batch each incur separate billing. VAD based on microphone
 energy is a basic MVP implementation; crowded rooms/background noise may split
 speech imperfectly. Live transcripts have approximate timestamps and no speaker
 identification. Browser recording still buffers WebM chunks in memory and uploads
