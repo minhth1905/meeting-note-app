@@ -96,3 +96,40 @@ ELEVENLABS_BATCH_MODEL=scribe_v3
 The browser records WebM/Opus for storage and separately sends downsampled 16-kHz mono PCM16 over the authenticated Socket.IO connection to NestJS. The NestJS gateway forwards base64 PCM audio to ElevenLabs WebSocket; the API key never reaches the browser. The client receives partial and committed transcripts. When recording stops, the audio file is uploaded and the batch endpoint (`POST /api/meetings/:id/transcribe`) runs before `POST /api/meetings/:id/notes`.
 
 **Limitations:** Batch transcription is currently a synchronous HTTP request, so long recordings may require a worker queue and reverse-proxy timeout changes. Long recordings are buffered in the browser and should eventually be uploaded in resilient chunks. Realtime speaker IDs are not persisted; final diarization comes from batch. The browser microphone requires HTTPS outside localhost. Both live and batch requests incur ElevenLabs usage costs. If batch fails, provisional realtime segments are retained and the client may still generate notes from those; check server logs and transcript quality before relying on the summary.
+
+
+## Tự động xử lý cuộc họp (không chờ HTTP lâu)
+
+Khi nhấn **Kết thúc và tạo tóm tắt**, trình duyệt gửi bản ghi âm lên server, sau đó gọi `POST /api/meetings/:id/process`. Endpoint này chỉ đưa yêu cầu vào PostgreSQL và trả kết quả ngay. NestJS worker tự chạy lần lượt:
+
+`queued → transcribing (ElevenLabs Batch) → generating_notes (LLM) → completed`
+
+Nếu lỗi, trạng thái chuyển sang `failed`, hiển thị nguyên nhân và có nút thử lại. Trang chi tiết kiểm tra trạng thái mỗi 2,5 giây khi đang xử lý. Người dùng không phải chờ một HTTP request dài hoặc bấm tạo AI Notes lần thứ hai. Nếu bản phiên âm không có nhiệm vụ nào, tab Nhiệm vụ thông báo **Không phát hiện nhiệm vụ nào**.
+
+### Chạy local
+
+```bash
+cp .env.example .env
+docker compose up -d postgres
+npm install
+npm run db:generate --workspace server
+npm run db:push --workspace server
+npm run dev
+```
+
+Cần cấu hình `ELEVENLABS_API_KEY` và `OPENCODE_API_KEY` trong file `.env`. Khi triển khai bằng Docker Compose:
+
+```bash
+docker compose up -d --build
+docker compose logs -f server
+```
+
+Server Dockerfile đã gọi `prisma db push` khi khởi động nên các cột job mới được thêm vào PostgreSQL. Trên hệ thống production nghiêm ngặt nên thay `db push` bằng Prisma migrations được kiểm soát.
+
+### Timeout và độ bền
+
+- Không tăng `proxy_read_timeout` lên hàng chục phút chỉ để chờ STT hoặc LLM. HTTP enqueue trả ngay; worker tiếp tục xử lý.
+- Worker có lease lưu trong PostgreSQL, dùng cho một VPS/NestJS instance; sau server crash, job sẽ được lấy lại khi lease hết hạn (mặc định 30 phút). Đảm bảo không chạy nhiều bản worker đồng thời trừ khi đã kiểm tra concurrency và lease renewal.
+- Timeout gọi ElevenLabs Batch 8 phút và LLM 3 phút. Khi quá thời gian, job báo lỗi và cho phép thử lại. Những recording rất dài nên chuyển sang một hàng đợi chuyên dụng có retry/heartbeat và xử lý audio theo phần.
+- Upload âm thanh vẫn là một request HTTP và browser hiện giữ các chunk trong bộ nhớ cho tới khi kết thúc. Với cuộc họp dài cần bổ sung resumable chunk upload, bảo vệ khi đóng tab, và tăng giới hạn proxy/body phù hợp.
+- File âm thanh và transcript chứa dữ liệu nhạy cảm; nên sử dụng HTTPS, backup, phân quyền truy cập, và chính sách lưu trữ/xóa rõ ràng.
