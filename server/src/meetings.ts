@@ -3,7 +3,9 @@ import {FileInterceptor} from '@nestjs/platform-express';
 import {IsString,IsOptional,IsBoolean,MaxLength} from 'class-validator';
 import {Request,Response} from 'express';
 import {Db} from './db';import {JwtGuard} from './auth';
-import {mkdir,writeFile,readFile,rm} from 'fs/promises';import path from 'path';
+import {mkdir,writeFile,readFile,rm,stat,readdir,mkdtemp} from 'fs/promises';import path from 'path';
+import os from 'os';
+import {spawn} from 'child_process';
 class CreateMeetingDto{@IsString() @MaxLength(180) title!:string;@IsOptional() @IsString() @MaxLength(2000) description?:string}
 class SpeakerDto{@IsString() speakerKey!:string;@IsString() displayName!:string}
 class ActionDto{@IsBoolean() completed!:boolean}
@@ -17,6 +19,62 @@ export function appendTranscriptWord(previous:string,token:string):string{
  if(/[\(\[\{]$/.test(previous))return previous+token;
  return previous+' '+token;
 }
+
+const MAX_OPENAI_AUDIO_BYTES=24*1024*1024; // Leave room below the 25 MB API limit.
+type TranscribedSegment={speakerKey:string|null;content:string;startMs:number;endMs:number};
+async function runAudioTool(command:string,args:string[]):Promise<string>{
+ return await new Promise<string>((resolve,reject)=>{
+  const child=spawn(command,args,{stdio:['ignore','pipe','pipe']});
+  let stdout='',stderr='';
+  child.stdout.on('data',(part:Buffer)=>{if(stdout.length<120000)stdout+=part.toString()});
+  child.stderr.on('data',(part:Buffer)=>{if(stderr.length<12000)stderr+=part.toString()});
+  child.on('error',reject);
+  child.on('close',code=>code===0?resolve(stdout):reject(new Error(command+' thất bại: '+stderr.slice(-600))));
+ });
+}
+async function getDurationSeconds(file:string){
+ const stdout=await runAudioTool('ffprobe',['-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',file]);
+ const seconds=Number(stdout.trim());
+ if(!Number.isFinite(seconds)||seconds<=0)throw new Error('Không đọc được thời lượng audio');
+ return seconds;
+}
+async function openAiDiarize(audio:Buffer,filename:string,key:string):Promise<any>{
+ if(audio.length>MAX_OPENAI_AUDIO_BYTES)throw new Error('Audio vượt giới hạn 24 MB an toàn cho OpenAI');
+ const form=new FormData();
+ form.append('file',new Blob([new Uint8Array(audio)],{type:filename.endsWith('.mp3')?'audio/mpeg':'audio/webm'}),filename);
+ form.append('model',process.env.OPENAI_BATCH_MODEL||'gpt-4o-transcribe-diarize');
+ form.append('response_format','diarized_json');
+ form.append('chunking_strategy','auto');
+ const response=await fetch('https://api.openai.com/v1/audio/transcriptions',{
+  method:'POST',headers:{Authorization:`Bearer ${key}`},body:form,signal:AbortSignal.timeout(8*60*1000)
+ });
+ if(!response.ok)throw new Error('OpenAI Batch error: '+(await response.text()).slice(0,350));
+ const payload:any=await response.json();
+ if(!Array.isArray(payload.segments))throw new Error('OpenAI không trả về segments có người nói');
+ return payload;
+}
+// OpenAI speaker IDs are only reliable within an individual transcription request.
+// Use distinct display keys for every independently transcribed chunk rather than
+// incorrectly claiming that Speaker A across separate chunks is the same person.
+function normalizeDiarizedSegments(payload:any,offsetMs:number,speakerLabels:Map<string,string>,speakerCounter:{value:number}):TranscribedSegment[]{
+ const output:TranscribedSegment[]=[];
+ for(const segment of payload.segments){
+  const content=typeof segment?.text==='string'?segment.text.trim():'';
+  const start=Number(segment?.start),end=Number(segment?.end);
+  if(!content||!Number.isFinite(start)||!Number.isFinite(end))continue;
+  const rawSpeaker=typeof segment?.speaker==='string'?segment.speaker.trim():'';
+  let speakerKey:string|null=null;
+  if(rawSpeaker){
+   if(!speakerLabels.has(rawSpeaker))speakerLabels.set(rawSpeaker,'Speaker '+(++speakerCounter.value));
+   speakerKey=speakerLabels.get(rawSpeaker)!;
+  }
+  const startMs=offsetMs+Math.max(0,Math.round(start*1000));
+  const endMs=offsetMs+Math.max(Math.round(start*1000),Math.round(end*1000));
+  output.push({speakerKey,content,startMs,endMs});
+ }
+ return output;
+}
+
 @Injectable() export class MeetingsService{
  constructor(public db:Db){}
  async own(id:string,userId:string){const m=await this.db.meeting.findFirst({where:{id,userId}});if(!m)throw new NotFoundException('Meeting không tồn tại');return m;}
@@ -35,34 +93,47 @@ export function appendTranscriptWord(previous:string,token:string):string{
  async transcribeAudio(id:string,userId:string){
   const meeting=await this.own(id,userId);
   if(!meeting.audioPath)throw new BadRequestException('Chưa có audio');
-  const key=process.env.ELEVENLABS_API_KEY;
-  if(!key)throw new BadRequestException('Chưa cấu hình ELEVENLABS_API_KEY');
-  const audio=await readFile(meeting.audioPath);
-  const form=new FormData();
-  form.append('file',new Blob([new Uint8Array(audio)],{type:'audio/webm'}),'meeting.webm');
-  form.append('model_id',process.env.ELEVENLABS_BATCH_MODEL||'scribe_v3');
-  form.append('language_code','vi');
-  form.append('diarize','true');
-  form.append('tag_audio_events','false');
-  const response=await fetch('https://api.elevenlabs.io/v1/speech-to-text',{
-    method:'POST',headers:{'xi-api-key':key},body:form,signal:AbortSignal.timeout(8*60*1000)
-  });
-  if(!response.ok)throw new BadRequestException('ElevenLabs batch error: '+(await response.text()).slice(0,300));
-  const payload:any=await response.json();
-  const words=Array.isArray(payload.words)?payload.words.filter((w:any)=>w.type==='word'&&typeof w.text==='string'):[];
-  if(!words.length)throw new BadRequestException('ElevenLabs không trả về từ nào; transcript realtime được giữ nguyên');
-  const segments:{speakerKey:string|null;content:string;startMs:number;endMs:number}[]=[];
-  let current:{speakerKey:string|null;content:string;startMs:number;endMs:number}|null=null;
-  for(const word of words){
-   const speakerKey=word.speaker_id===null||word.speaker_id===undefined?null:'Speaker '+(Number(String(word.speaker_id).split('_').pop())+1);
-   const startMs=Math.max(0,Math.round(Number(word.start||0)*1000));
-   const endMs=Math.max(startMs,Math.round(Number(word.end||word.start||0)*1000));
-   if(!current||current.speakerKey!==speakerKey||startMs-current.endMs>1500){
-    if(current?.content.trim())segments.push({...current,content:current.content.trim()});
-    current={speakerKey,content:word.text,startMs,endMs};
-   }else{current.content=appendTranscriptWord(current.content,word.text);current.endMs=endMs}
+  const key=process.env.OPENAI_API_KEY;
+  if(!key)throw new BadRequestException('Chưa cấu hình OPENAI_API_KEY');
+  const speakerCounter={value:0};
+  const segments:TranscribedSegment[]=[];
+  let tempDir:string|null=null;
+  try{
+   const inputSize=(await stat(meeting.audioPath)).size;
+   if(inputSize<=MAX_OPENAI_AUDIO_BYTES){
+    const payload=await openAiDiarize(await readFile(meeting.audioPath),'meeting.webm',key);
+    segments.push(...normalizeDiarizedSegments(payload,0,new Map(),speakerCounter));
+   }else{
+    // A four-hour WebM recording can exceed OpenAI's 25 MB upload limit.
+    // Split with FFmpeg into independently decodable 10-minute MP3 parts.
+    tempDir=await mkdtemp(path.join(os.tmpdir(),'meeting-diarize-'));
+    const partTemplate=path.join(tempDir,'part-%04d.mp3');
+    await runAudioTool('ffmpeg',[
+     '-hide_banner','-loglevel','error','-y','-i',meeting.audioPath,
+     '-map','0:a:0','-vn','-ac','1','-ar','16000','-c:a','libmp3lame',
+     '-b:a','32k','-f','segment','-segment_time','600',
+     '-reset_timestamps','1',partTemplate
+    ]);
+    const parts=(await readdir(tempDir)).filter(name=>/^part-\\d{4}\\.mp3$/.test(name)).sort();
+    if(!parts.length)throw new Error('FFmpeg không tạo được đoạn audio');
+    let offsetMs=0;
+    for(const part of parts){
+     const file=path.join(tempDir,part);
+     const size=(await stat(file)).size;
+     if(size>MAX_OPENAI_AUDIO_BYTES)throw new Error('Audio chunk vẫn vượt 24 MB');
+     const payload=await openAiDiarize(await readFile(file),part,key);
+     segments.push(...normalizeDiarizedSegments(payload,offsetMs,new Map(),speakerCounter));
+     offsetMs+=Math.round((await getDurationSeconds(file))*1000);
+    }
+   }
+  }catch(error:any){
+   // Never destroy realtime transcript when OpenAI batch fails.
+   throw new BadRequestException(error?.message||'Không thể phiên âm batch bằng OpenAI');
+  }finally{
+   if(tempDir)await rm(tempDir,{recursive:true,force:true}).catch(()=>{});
   }
-  if(current?.content.trim())segments.push({...current,content:current.content.trim()});
+  if(!segments.length)throw new BadRequestException('OpenAI không trả về đoạn phiên âm nào; giữ nguyên transcript realtime');
+  // Replace provisional live captions only after every batch request succeeds.
   await this.db.$transaction(async tx=>{
    await tx.segment.deleteMany({where:{meetingId:id}});
    await tx.segment.createMany({data:segments.map(segment=>({meetingId:id,...segment}))});
