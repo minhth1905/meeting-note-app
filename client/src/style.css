@@ -45,3 +45,9 @@
 .minutes-task-meta{display:flex;flex-wrap:wrap;gap:14px;color:#778499;font-size:11px;margin-top:5px}
 .minutes-task-meta span{display:inline-flex;gap:5px;align-items:center}
 @media(max-width:650px){.minutes-container{padding:13px}.minutes-facts>div{display:block}.minutes-facts dt,.minutes-facts dd{display:inline}.minutes-facts dd{margin-left:6px}}
+
+/* Realtime captions only: no provisional speaker labels */
+.live-plain-line{padding:11px 14px;border-bottom:1px solid #edf1f6;font-size:14px;line-height:1.55}
+.live-plain-line small{color:#77869d;display:block;margin-bottom:5px;font-size:11px}
+.live-plain-line p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.live-plain-interim{color:#7d899c;background:#f7faff;font-style:italic}
