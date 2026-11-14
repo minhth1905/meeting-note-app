@@ -114,7 +114,7 @@ function normalizeDiarizedSegments(payload:any,offsetMs:number,speakerLabels:Map
      '-b:a','32k','-f','segment','-segment_time','600',
      '-reset_timestamps','1',partTemplate
     ]);
-    const parts=(await readdir(tempDir)).filter(name=>/^part-\\d{4}\\.mp3$/.test(name)).sort();
+    const parts=(await readdir(tempDir)).filter(name=>/^part-\d{4}\.mp3$/.test(name)).sort();
     if(!parts.length)throw new Error('FFmpeg không tạo được đoạn audio');
     let offsetMs=0;
     for(const part of parts){
