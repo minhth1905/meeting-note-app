@@ -16,11 +16,11 @@ An original, Vietnamese-first Meeting Notes app inspired by the supplied UI refe
 
 ## Start locally
 
-Requirements: Node.js 22+, npm, Docker (PostgreSQL), working OpenAI, ElevenLabs and OpenCode Go API keys.
+Requirements: Node.js 22+, npm, Docker (PostgreSQL), working OpenAI and OpenCode Go API keys.
 
 ```bash
 cp .env.example .env
-# Set JWT_SECRET, DEMO_EMAIL, DEMO_PASSWORD, OPENAI_API_KEY, ELEVENLABS_API_KEY, OPENCODE_API_KEY
+# Set JWT_SECRET, DEMO_EMAIL, DEMO_PASSWORD, OPENAI_API_KEY, OPENCODE_API_KEY
 # Optional: OPENCODE_MODEL (default: glm-5.3-flash), OPENCODE_BASE_URL
 # Database is exposed on localhost only:
 docker compose up -d postgres
@@ -137,7 +137,7 @@ reconnection for long sessions. Test a short real recording before deploying.
 
 Khi nhấn **Kết thúc và tạo tóm tắt**, trình duyệt gửi bản ghi âm lên server, sau đó gọi `POST /api/meetings/:id/process`. Endpoint này chỉ đưa yêu cầu vào PostgreSQL và trả kết quả ngay. NestJS worker tự chạy lần lượt:
 
-`queued → transcribing (ElevenLabs Batch) → generating_notes (LLM) → completed`
+`queued → transcribing (OpenAI Diarize Batch) → generating_notes (LLM) → completed`
 
 Nếu lỗi, trạng thái chuyển sang `failed`, hiển thị nguyên nhân và có nút thử lại. Trang chi tiết kiểm tra trạng thái mỗi 2,5 giây khi đang xử lý. Người dùng không phải chờ một HTTP request dài hoặc bấm tạo AI Notes lần thứ hai. Nếu bản phiên âm không có nhiệm vụ nào, tab Nhiệm vụ thông báo **Không phát hiện nhiệm vụ nào**.
 
@@ -152,7 +152,7 @@ npm run db:push --workspace server
 npm run dev
 ```
 
-Cần cấu hình `ELEVENLABS_API_KEY` và `OPENCODE_API_KEY` trong file `.env`. Khi triển khai bằng Docker Compose:
+Cần cấu hình `OPENAI_API_KEY` và `OPENCODE_API_KEY` trong file `.env`. Khi triển khai bằng Docker Compose:
 
 ```bash
 docker compose up -d --build
@@ -165,7 +165,7 @@ Server Dockerfile đã gọi `prisma db push` khi khởi động nên các cột
 
 - Không tăng `proxy_read_timeout` lên hàng chục phút chỉ để chờ STT hoặc LLM. HTTP enqueue trả ngay; worker tiếp tục xử lý.
 - Worker có lease lưu trong PostgreSQL, dùng cho một VPS/NestJS instance; sau server crash, job sẽ được lấy lại khi lease hết hạn (mặc định 30 phút). Đảm bảo không chạy nhiều bản worker đồng thời trừ khi đã kiểm tra concurrency và lease renewal.
-- Timeout gọi ElevenLabs Batch 8 phút và LLM 3 phút. Khi quá thời gian, job báo lỗi và cho phép thử lại. Những recording rất dài nên chuyển sang một hàng đợi chuyên dụng có retry/heartbeat và xử lý audio theo phần.
+- Timeout cho mỗi đoạn OpenAI Batch là 8 phút và LLM là 3 phút. Khi quá thời gian, job báo lỗi và cho phép thử lại. Những recording rất dài nên chuyển sang một hàng đợi chuyên dụng có retry/heartbeat và xử lý audio theo phần.
 - Upload âm thanh vẫn là một request HTTP và browser hiện giữ các chunk trong bộ nhớ cho tới khi kết thúc. Với cuộc họp dài cần bổ sung resumable chunk upload, bảo vệ khi đóng tab, và tăng giới hạn proxy/body phù hợp.
 - File âm thanh và transcript chứa dữ liệu nhạy cảm; nên sử dụng HTTPS, backup, phân quyền truy cập, và chính sách lưu trữ/xóa rõ ràng.
 
