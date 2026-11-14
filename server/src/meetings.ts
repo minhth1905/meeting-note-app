@@ -81,7 +81,7 @@ export function appendTranscriptWord(previous:string,token:string):string{
 }
 @Controller('meetings')@UseGuards(JwtGuard)export class MeetingsController{
  constructor(private svc:MeetingsService,private db:Db){}
- @Get()list(@Req() r:Request&{userId:string}){return this.db.meeting.findMany({where:{userId:r.userId},orderBy:{createdAt:'desc'},select:{id:true,title:true,description:true,status:true,createdAt:true,startedAt:true,finishedAt:true,_count:{select:{segments:true,actions:true}}}})}
+ @Get()list(@Req() r:Request&{userId:string}){return this.db.meeting.findMany({where:{userId:r.userId},orderBy:{createdAt:'desc'},select:{id:true,title:true,description:true,status:true,processingStage:true,summary:true,createdAt:true,startedAt:true,finishedAt:true,_count:{select:{segments:true,actions:true}}}})}
  @Post()create(@Req() r:Request&{userId:string},@Body() b:CreateMeetingDto){return this.db.meeting.create({data:{title:b.title.trim(),description:b.description||'',userId:r.userId}})}
  @Get(':id')detail(@Req() r:Request&{userId:string},@Param('id') id:string){return this.svc.detail(id,r.userId)}
  @Delete(':id')async remove(@Req() r:Request&{userId:string},@Param('id')id:string){const m=await this.svc.own(id,r.userId);await this.db.meeting.delete({where:{id}});if(m.audioPath)await rm(m.audioPath,{force:true}).catch(()=>{});return {ok:true}}
