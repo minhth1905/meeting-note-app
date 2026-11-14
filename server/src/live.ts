@@ -16,6 +16,7 @@ type Session={
  ws:WebSocket;meetingId:string;started:number;ready:boolean;closing:boolean;
  bufferedMs:number;speechMs:number;silenceMs:number;lastSegmentEnd:number;
  turns:{startMs:number;endMs:number}[];
+ turnBounds:Map<string,{startMs:number;endMs:number}>;
  pending:Set<string>;
  partials:Map<string,string>;
  completed:Map<string,{content:string;startMs:number;endMs:number}>;
@@ -48,7 +49,7 @@ export class LiveGateway implements OnGatewayConnection,OnGatewayDisconnect{
    });
    const session:Session={
     ws,meetingId:data.meetingId,started:Date.now(),ready:false,closing:false,
-    bufferedMs:0,speechMs:0,silenceMs:0,lastSegmentEnd:0,turns:[],pending:new Set(),
+    bufferedMs:0,speechMs:0,silenceMs:0,lastSegmentEnd:0,turns:[],turnBounds:new Map(),pending:new Set(),
     partials:new Map(),completed:new Map(),pendingWrites:new Set(),onSettled:null
    };
    this.active.set(client.id,session);
@@ -91,7 +92,7 @@ export class LiveGateway implements OnGatewayConnection,OnGatewayDisconnect{
      break;
     case 'input_audio_buffer.committed': {
      const itemId=String(event.item_id||'');
-     if(itemId)s.pending.add(itemId);
+     if(itemId){s.pending.add(itemId);const bounds=s.turns.shift();if(bounds)s.turnBounds.set(itemId,bounds)}
      break;
     }
     case 'conversation.item.input_audio_transcription.delta': {
@@ -100,7 +101,7 @@ export class LiveGateway implements OnGatewayConnection,OnGatewayDisconnect{
      const prior=s.partials.get(id)||'';
      const text=prior+String(event.delta||'');
      s.partials.set(id,text);
-     const bounds=s.completed.get(id);
+     const bounds=s.turnBounds.get(id);
      client.emit('live:interim',{speakerKey:null,content:text,startMs:bounds?.startMs??s.lastSegmentEnd,endMs:Date.now()-s.started});
      break;
     }
@@ -108,7 +109,8 @@ export class LiveGateway implements OnGatewayConnection,OnGatewayDisconnect{
      const id=String(event.item_id||'');
      if(!id||s.completed.has(id))return;
      const content=String(event.transcript||'').trim();
-     const bounds=s.turns.shift()||{startMs:s.lastSegmentEnd,endMs:Date.now()-s.started};
+     const bounds=s.turnBounds.get(id)||{startMs:s.lastSegmentEnd,endMs:Date.now()-s.started};
+     s.turnBounds.delete(id);
      s.completed.set(id,{content,...bounds});
      s.pending.delete(id);
      s.partials.delete(id);
@@ -127,7 +129,7 @@ export class LiveGateway implements OnGatewayConnection,OnGatewayDisconnect{
     }
     case 'conversation.item.input_audio_transcription.failed':{
      const id=String(event.item_id||'');
-     s.pending.delete(id);s.partials.delete(id);s.turns.shift();
+     s.pending.delete(id);s.partials.delete(id);s.turnBounds.delete(id);
      client.emit('live:error',String(event.error?.message||'Không thể phiên âm đoạn âm thanh'));
      s.onSettled?.();break;
     }
