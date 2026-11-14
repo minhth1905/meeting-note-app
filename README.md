@@ -80,3 +80,19 @@ Browser MediaRecorder (WebM/Opus chunks) â†’ authenticated Socket.IO on NestJS â
 8. AI notes generation happens in the HTTP request. For long transcripts and concurrency, move processing to a background queue with retries and idempotency.
 9. The live UI deliberately does not claim reliable real-time LLM summary: notes are generated when recording ends.
 10. Speaker IDs are diarization estimates and can change; name assignment is manual. The transcript may contain duplicate segments from provider endpointing; verify with integration tests.
+
+## ElevenLabs Scribe transcription
+
+The live transcription provider is ElevenLabs Scribe v3 Live. Completed recordings are submitted to Scribe v3 Batch with diarization enabled before the AI summary runs. The batch result replaces provisional live transcript segments and returns Speaker 1, Speaker 2, etc., which can be renamed on the meeting detail page. Speaker labels are not identities; users should verify them.
+
+Set the following server-side environment variables in `.env`:
+
+```env
+ELEVENLABS_API_KEY=your-elevenlabs-api-key
+ELEVENLABS_LIVE_MODEL=scribe_v3_live
+ELEVENLABS_BATCH_MODEL=scribe_v3
+```
+
+The browser records WebM/Opus for storage and separately sends downsampled 16-kHz mono PCM16 over the authenticated Socket.IO connection to NestJS. The NestJS gateway forwards base64 PCM audio to ElevenLabs WebSocket; the API key never reaches the browser. The client receives partial and committed transcripts. When recording stops, the audio file is uploaded and the batch endpoint (`POST /api/meetings/:id/transcribe`) runs before `POST /api/meetings/:id/notes`.
+
+**Limitations:** Batch transcription is currently a synchronous HTTP request, so long recordings may require a worker queue and reverse-proxy timeout changes. Long recordings are buffered in the browser and should eventually be uploaded in resilient chunks. Realtime speaker IDs are not persisted; final diarization comes from batch. The browser microphone requires HTTPS outside localhost. Both live and batch requests incur ElevenLabs usage costs. If batch fails, provisional realtime segments are retained and the client may still generate notes from those; check server logs and transcript quality before relying on the summary.
