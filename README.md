@@ -134,7 +134,6 @@ Server Dockerfile đã gọi `prisma db push` khi khởi động nên các cột
 - Upload âm thanh vẫn là một request HTTP và browser hiện giữ các chunk trong bộ nhớ cho tới khi kết thúc. Với cuộc họp dài cần bổ sung resumable chunk upload, bảo vệ khi đóng tab, và tăng giới hạn proxy/body phù hợp.
 - File âm thanh và transcript chứa dữ liệu nhạy cảm; nên sử dụng HTTPS, backup, phân quyền truy cập, và chính sách lưu trữ/xóa rõ ràng.
 
-
 ## Biên bản AI có cấu trúc
 
 Tab **Biên bản** được trình bày theo các phần: **Thông tin chung → Tóm tắt → Nội dung chính (theo chủ đề) → Quyết định → Việc cần làm**. API ghi trường `summary` để Dashboard vẫn hiển thị mô tả ngắn, đồng thời lưu trường JSON `minutes` chứa hình thức cuộc họp, những người tham dự được nêu rõ, và các nhóm chủ đề.
