@@ -55,12 +55,16 @@ export class LiveGateway implements OnGatewayConnection,OnGatewayDisconnect{
    this.active.set(client.id,session);
    ws.on('open',()=>{
     const keywords=(process.env.OPENAI_STT_KEYWORDS||'').split(',').map(s=>s.trim()).filter(Boolean).slice(0,30);
+    const model=process.env.OPENAI_LIVE_MODEL||'gpt-live-transcribe';
     const transcription:Record<string,unknown>={
-     model:process.env.OPENAI_LIVE_MODEL||'gpt-live-transcribe',
-     languages:['vi'],delay:'low',
+     model,
+     languages:['vi'],
      prompt:'Phiên âm cuộc họp bằng tiếng Việt, giữ nguyên tên riêng và thuật ngữ chuyên ngành.'
     };
-    if(keywords.length)transcription.keywords=keywords;
+    // The low-latency delay hint is specific to gpt-live-transcribe.
+    // gpt-transcribe rejects it with: "The 'delay' parameter is not supported for this model."
+    if(model==='gpt-live-transcribe')transcription.delay='low';
+    if(keywords.length&&model==='gpt-live-transcribe')transcription.keywords=keywords;
     ws.send(JSON.stringify({
      type:'session.update',
      session:{type:'transcription',audio:{input:{
