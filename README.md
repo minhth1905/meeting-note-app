@@ -16,11 +16,11 @@ An original, Vietnamese-first Meeting Notes app inspired by the supplied UI refe
 
 ## Start locally
 
-Requirements: Node.js 22+, npm, Docker (PostgreSQL), working OpenAI, ElevenLabs and OpenCode Go API keys.
+Requirements: Node.js 22+, npm, Docker (PostgreSQL), working OpenAI and OpenCode Go API keys.
 
 ```bash
 cp .env.example .env
-# Set JWT_SECRET, DEMO_EMAIL, DEMO_PASSWORD, OPENAI_API_KEY, ELEVENLABS_API_KEY, OPENCODE_API_KEY
+# Set JWT_SECRET, DEMO_EMAIL, DEMO_PASSWORD, OPENAI_API_KEY, OPENCODE_API_KEY
 # Optional: OPENCODE_MODEL (default: glm-5.3-flash), OPENCODE_BASE_URL
 # Database is exposed on localhost only:
 docker compose up -d postgres
@@ -81,7 +81,7 @@ Browser MediaRecorder (WebM/Opus chunks) → authenticated Socket.IO on NestJS �
 9. The live UI deliberately does not claim reliable real-time LLM summary: notes are generated when recording ends.
 10. Speaker IDs are diarization estimates and can change; name assignment is manual. The transcript may contain duplicate segments from provider endpointing; verify with integration tests.
 
-## Realtime: OpenAI gpt-live-transcribe + final: ElevenLabs Batch
+## OpenAI realtime + OpenAI diarized batch
 
 Realtime captions use OpenAI's transcription WebSocket; the server connects to
 `wss://api.openai.com/v1/realtime?intent=transcription` and configures
@@ -90,10 +90,27 @@ Socket.IO link. NestJS performs simple energy/silence-based turn detection and
 commits speech turns to OpenAI. Only completed turns are stored in PostgreSQL;
 partial text is shown temporarily. The OpenAI key is never sent to the browser.
 
-When recording ends, the original audio is uploaded to the VPS and **ElevenLabs
-Scribe v3 Batch** creates the official transcript with speaker diarization. The
-existing background processing pipeline then generates minutes and action items.
-Live captions do not attempt speaker identification.
+When recording ends, the original recording is uploaded to the server. The
+persistent NestJS processing worker transcribes it via **OpenAI
+gpt-4o-transcribe-diarize** (Audio Transcriptions API with `diarized_json` and
+`chunking_strategy=auto`). It persists start/end timestamps, dialogue, and
+anonymous speaker labels, replacing provisional realtime transcript segments
+**only after all batch calls succeed**. The LLM then generates the minutes.
+The realtime pipeline remains unchanged; there are no ElevenLabs API calls.
+
+OpenAI accepts a maximum 25 MB input per request. Files larger than 24 MiB
+are split with FFmpeg into separately decodable 10-minute MP3 clips.
+Each clip is processed sequentially and timestamp offsets are stitched back.
+**Important:** a speaker label from one independently processed clip is NOT
+automatically identified as the same speaker in another clip. This implementation
+assigns distinct anonymous labels across clips to avoid false identity matching;
+long recordings may show more speaker labels than actual participants. Accurate
+cross-clip matching would require voice embeddings or known-speaker reference
+clips. Short recordings under 24 MiB are sent in one request and are not affected.
+
+OpenAI currently lists `gpt-4o-transcribe-diarize` as deprecated, with
+shutdown scheduled for **February 26, 2027**. Keep the provider configurable
+and plan a replacement before that date.
 
 Configure server-side environment variables:
 
@@ -101,15 +118,14 @@ Configure server-side environment variables:
 OPENAI_API_KEY=your-openai-api-key
 OPENAI_LIVE_MODEL=gpt-live-transcribe
 OPENAI_STT_KEYWORDS=NestJS,Ruby on Rails,PostgreSQL
-ELEVENLABS_API_KEY=your-elevenlabs-api-key
-ELEVENLABS_BATCH_MODEL=scribe_v3
+OPENAI_BATCH_MODEL=gpt-4o-transcribe-diarize
 OPENCODE_API_KEY=your-opencode-api-key
 ```
 
 Use an OpenAI API key with separate API billing and model access; a ChatGPT
 subscription alone does not authorize API usage.
 
-**Limitations:** Live and batch each incur separate billing. VAD based on microphone
+**Limitations:** OpenAI live and OpenAI diarization batch each incur separate billing. VAD based on microphone
 energy is a basic MVP implementation; crowded rooms/background noise may split
 speech imperfectly. Live transcripts have approximate timestamps and no speaker
 identification. Browser recording still buffers WebM chunks in memory and uploads
@@ -121,7 +137,7 @@ reconnection for long sessions. Test a short real recording before deploying.
 
 Khi nhấn **Kết thúc và tạo tóm tắt**, trình duyệt gửi bản ghi âm lên server, sau đó gọi `POST /api/meetings/:id/process`. Endpoint này chỉ đưa yêu cầu vào PostgreSQL và trả kết quả ngay. NestJS worker tự chạy lần lượt:
 
-`queued → transcribing (ElevenLabs Batch) → generating_notes (LLM) → completed`
+`queued → transcribing (OpenAI Diarize Batch) → generating_notes (LLM) → completed`
 
 Nếu lỗi, trạng thái chuyển sang `failed`, hiển thị nguyên nhân và có nút thử lại. Trang chi tiết kiểm tra trạng thái mỗi 2,5 giây khi đang xử lý. Người dùng không phải chờ một HTTP request dài hoặc bấm tạo AI Notes lần thứ hai. Nếu bản phiên âm không có nhiệm vụ nào, tab Nhiệm vụ thông báo **Không phát hiện nhiệm vụ nào**.
 
@@ -136,7 +152,7 @@ npm run db:push --workspace server
 npm run dev
 ```
 
-Cần cấu hình `ELEVENLABS_API_KEY` và `OPENCODE_API_KEY` trong file `.env`. Khi triển khai bằng Docker Compose:
+Cần cấu hình `OPENAI_API_KEY` và `OPENCODE_API_KEY` trong file `.env`. Khi triển khai bằng Docker Compose:
 
 ```bash
 docker compose up -d --build
@@ -149,7 +165,7 @@ Server Dockerfile đã gọi `prisma db push` khi khởi động nên các cột
 
 - Không tăng `proxy_read_timeout` lên hàng chục phút chỉ để chờ STT hoặc LLM. HTTP enqueue trả ngay; worker tiếp tục xử lý.
 - Worker có lease lưu trong PostgreSQL, dùng cho một VPS/NestJS instance; sau server crash, job sẽ được lấy lại khi lease hết hạn (mặc định 30 phút). Đảm bảo không chạy nhiều bản worker đồng thời trừ khi đã kiểm tra concurrency và lease renewal.
-- Timeout gọi ElevenLabs Batch 8 phút và LLM 3 phút. Khi quá thời gian, job báo lỗi và cho phép thử lại. Những recording rất dài nên chuyển sang một hàng đợi chuyên dụng có retry/heartbeat và xử lý audio theo phần.
+- Timeout cho mỗi đoạn OpenAI Batch là 8 phút và LLM là 3 phút. Khi quá thời gian, job báo lỗi và cho phép thử lại. Những recording rất dài nên chuyển sang một hàng đợi chuyên dụng có retry/heartbeat và xử lý audio theo phần.
 - Upload âm thanh vẫn là một request HTTP và browser hiện giữ các chunk trong bộ nhớ cho tới khi kết thúc. Với cuộc họp dài cần bổ sung resumable chunk upload, bảo vệ khi đóng tab, và tăng giới hạn proxy/body phù hợp.
 - File âm thanh và transcript chứa dữ liệu nhạy cảm; nên sử dụng HTTPS, backup, phân quyền truy cập, và chính sách lưu trữ/xóa rõ ràng.
 
