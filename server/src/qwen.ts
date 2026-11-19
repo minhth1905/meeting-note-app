@@ -23,6 +23,14 @@ export function logQwenUsage(kind:string,usage:any){
  if(!usage)return;
  console.info('Qwen '+kind+' usage', {input_tokens:usage.input_tokens,output_tokens:usage.output_tokens,total_tokens:usage.total_tokens,duration:usage.duration});
 }
+export function qwenSentenceText(sentence:any){
+ const words=Array.isArray(sentence?.words)?sentence.words:[];
+ if(words.length){
+  const text=words.map((word:any)=>String(word?.text||'')+String(word?.punctuation||'')).join('').trim();
+  if(text)return text;
+ }
+ return typeof sentence?.text==='string'?sentence.text.trim():'';
+}
 async function json(response:Response,stage:string){
  if(!response.ok)throw Error('Qwen '+stage+' HTTP '+response.status);
  return await response.json() as any;
@@ -59,7 +67,7 @@ export async function qwenDiarize(audio:Buffer){
   // Adapt Qwen milliseconds to the existing OpenAI-shaped normalization.
   return {segments:transcript.transcripts.flatMap((t:any)=>{
    if(!Array.isArray(t.sentences))throw Error('Qwen missing sentences');
-   return t.sentences.map((s:any)=>({text:s.text,start:s.begin_time==null?NaN:s.begin_time/1000,end:s.end_time==null?NaN:s.end_time/1000,speaker:s.speaker_id==null?'':String(s.speaker_id)}));
+   return t.sentences.map((s:any)=>({text:qwenSentenceText(s),start:s.begin_time==null?NaN:s.begin_time/1000,end:s.end_time==null?NaN:s.end_time/1000,speaker:s.speaker_id==null?'':String(s.speaker_id)}));
   })};
  }
  throw Error('Qwen transcription timed out');
