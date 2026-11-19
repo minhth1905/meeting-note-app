@@ -6,6 +6,7 @@ import {Db} from './db';import {JwtGuard} from './auth';
 import {mkdir,writeFile,readFile,rm,stat,readdir,mkdtemp} from 'fs/promises';import path from 'path';
 import os from 'os';
 import {spawn} from 'child_process';
+import {useQwen,qwenDiarize,qwenKey} from './qwen';
 class CreateMeetingDto{@IsString() @MaxLength(180) title!:string;@IsOptional() @IsString() @MaxLength(2000) description?:string}
 class SpeakerDto{@IsString() speakerKey!:string;@IsString() displayName!:string}
 class ActionDto{@IsBoolean() completed!:boolean}
@@ -93,14 +94,15 @@ function normalizeDiarizedSegments(payload:any,offsetMs:number,speakerLabels:Map
  async transcribeAudio(id:string,userId:string){
   const meeting=await this.own(id,userId);
   if(!meeting.audioPath)throw new BadRequestException('Chưa có audio');
-  const key=process.env.OPENAI_API_KEY;
+  const qwen=useQwen('BATCH');
+  const key=qwen?qwenKey():process.env.OPENAI_API_KEY;
   if(!key)throw new BadRequestException('Chưa cấu hình OPENAI_API_KEY');
   const speakerCounter={value:0};
   const segments:TranscribedSegment[]=[];
   let tempDir:string|null=null;
   try{
    const inputSize=(await stat(meeting.audioPath)).size;
-   if(inputSize<=MAX_OPENAI_AUDIO_BYTES){
+   if(!qwen&&inputSize<=MAX_OPENAI_AUDIO_BYTES){
     const payload=await openAiDiarize(await readFile(meeting.audioPath),'meeting.webm',key);
     segments.push(...normalizeDiarizedSegments(payload,0,new Map(),speakerCounter));
    }else{
@@ -111,7 +113,7 @@ function normalizeDiarizedSegments(payload:any,offsetMs:number,speakerLabels:Map
     await runAudioTool('ffmpeg',[
      '-hide_banner','-loglevel','error','-y','-i',meeting.audioPath,
      '-map','0:a:0','-vn','-ac','1','-ar','16000','-c:a','libmp3lame',
-     '-b:a','32k','-f','segment','-segment_time','600',
+     '-b:a',qwen?'64k':'32k','-f','segment','-segment_time',qwen?'6600':'600',
      '-reset_timestamps','1',partTemplate
     ]);
     const parts=(await readdir(tempDir)).filter(name=>/^part-\d{4}\.mp3$/.test(name)).sort();
@@ -120,19 +122,20 @@ function normalizeDiarizedSegments(payload:any,offsetMs:number,speakerLabels:Map
     for(const part of parts){
      const file=path.join(tempDir,part);
      const size=(await stat(file)).size;
-     if(size>MAX_OPENAI_AUDIO_BYTES)throw new Error('Audio chunk vẫn vượt 24 MB');
-     const payload=await openAiDiarize(await readFile(file),part,key);
+     if(!qwen&&size>MAX_OPENAI_AUDIO_BYTES)throw new Error('Audio chunk vẫn vượt 24 MB');
+     const audio=await readFile(file);
+     const payload=qwen?await qwenDiarize(audio):await openAiDiarize(audio,part,key);
      segments.push(...normalizeDiarizedSegments(payload,offsetMs,new Map(),speakerCounter));
      offsetMs+=Math.round((await getDurationSeconds(file))*1000);
     }
    }
   }catch(error:any){
    // Never destroy realtime transcript when OpenAI batch fails.
-   throw new BadRequestException(error?.message||'Không thể phiên âm batch bằng OpenAI');
+   throw new BadRequestException(error?.message||'Không thể phiên âm batch');
   }finally{
    if(tempDir)await rm(tempDir,{recursive:true,force:true}).catch(()=>{});
   }
-  if(!segments.length)throw new BadRequestException('OpenAI không trả về đoạn phiên âm nào; giữ nguyên transcript realtime');
+  if(!segments.length)throw new BadRequestException('Không có đoạn phiên âm nào; giữ nguyên transcript realtime');
   // Replace provisional live captions only after every batch request succeeds.
   await this.db.$transaction(async tx=>{
    await tx.segment.deleteMany({where:{meetingId:id}});
