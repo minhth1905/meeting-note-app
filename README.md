@@ -183,3 +183,20 @@ npm run db:push --workspace server
 Khi chạy Docker Compose, container server hiện đã gọi `prisma db push` lúc khởi động; vẫn nên quản lý schema bằng migration khi đưa lên production. Với cuộc họp đã tạo trước khi có trường này, phần biên bản vẫn hiển thị summary, decisions, actions cũ. Bấm **Tạo lại biên bản** để bổ sung các mục mới (tốn thêm lượt gọi LLM).
 
 AI được yêu cầu chỉ dùng nội dung transcript, không tự suy đoán tên người, hình thức cuộc họp, nhiệm vụ hoặc hạn chót. Ngày và thời lượng lấy từ metadata cuộc họp ở hệ thống; những dữ liệu không xác định sẽ hiển thị **Chưa xác định**.
+
+
+## Qwen Audio 3.1 ASR (optional)
+
+Create a Singapore QwenCloud API key. In the server's root .env set:
+
+```dotenv
+STT_LIVE_PROVIDER=qwen
+STT_BATCH_PROVIDER=qwen
+DASHSCOPE_API_KEY=your-key
+QWEN_LANGUAGES=vi,en
+QWEN_STT_KEYWORDS=NestJS,Ruby on Rails,PostgreSQL,Redis
+```
+
+Restart the server (rebuild the Docker images after updating code). Both provider settings can independently be set to openai. OpenCode summary settings remain unchanged. Qwen live captions do not have speaker IDs; the final batch transcript replaces them only after all parts succeed. FFmpeg converts batch recordings to mono MP3 and splits at 110 minutes. Speaker labels are independent across parts; they do not identify the same person across chunks. Qwen uploads use model-scoped temporary OSS storage (expires after 48 hours; for development/testing, not production). Audio is sent to the configured Qwen region; obtain consent before using actual meeting data. Token usage is logged when supplied by Qwen. No public audio endpoint or separate storage account is required for this test setup.
+
+Manual smoke test: record 1–2 minutes of Vietnamese with two speakers, confirm live partial/final captions, stop and generate notes, confirm final speaker labels and timestamps, and check server usage logs. Then repeat with the OpenAI settings to verify backwards compatibility. Do not deploy to production before validating long recordings, temporary-storage constraints and worker lease behavior.
