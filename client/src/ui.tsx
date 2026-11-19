@@ -180,7 +180,7 @@ const pause=()=>{if(!media.current)return;if(media.current.state==='recording'){
  await new Promise<void>(resolve=>{
   const live=socket.current;
   if(!live?.connected){resolve();return}
-  const timeout=setTimeout(()=>{live.off('live:stopped',onStopped);resolve()},7500);
+  const timeout=setTimeout(()=>{live.off('live:stopped',onStopped);resolve()},18000);
   const onStopped=()=>{clearTimeout(timeout);resolve()};
   live.once('live:stopped',onStopped);
   live.emit('live:stop');
